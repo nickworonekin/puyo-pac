@@ -1,4 +1,5 @@
-﻿using PuyoPac.HedgeLib.Exceptions;
+﻿using PuyoPac.HedgeLib.Compression;
+using PuyoPac.HedgeLib.Exceptions;
 using PuyoPac.HedgeLib.IO;
 using System;
 
@@ -7,15 +8,18 @@ namespace PuyoPac.HedgeLib.Headers
     public class PACx403Header : BINAHeader
     {
         // Variables/Constants
-        public uint ID, DependencyEntriesLength, StringTableLength,
+        public uint ID, DependencyEntriesLength, CompressedChunksLength, StringTableLength,
             RootOffset, RootCompressedLength, RootLength,
             Length;
 
         public bool HasDependencies;
+        public bool HasCompressedBlocks;
+
+        public PacCompressionFormat CompressionFormat = PacCompressionFormat.None;
 
         public const string PACxSignature = "PACx";
         public const uint LengthWithoutDependencies = 0x20, LengthWithDependencies = 0x30;
-        public const ushort VersionNumber = 403, UnknownConstant = 0x108, DependencyConstant = 0x82;
+        public const ushort VersionNumber = 403, UnknownConstant = 0x108, DependencyConstant = 0x82, UnknownConstant1 = 0x208;
 
         // Constructors
         public PACx403Header(ushort version = VersionNumber, bool isBigEndian = false, bool hasDependencies = false)
@@ -55,15 +59,44 @@ namespace PuyoPac.HedgeLib.Headers
             RootOffset = reader.ReadUInt32();
             RootCompressedLength = reader.ReadUInt32();
             RootLength = reader.ReadUInt32();
-            HasDependencies = reader.ReadInt16() == DependencyConstant;
+
+            var flags = reader.ReadInt16();
+            HasDependencies = (flags & 0x2) != 0;
+            HasCompressedBlocks = (flags & 0x1) != 0;
 
             ushort uk1 = reader.ReadUInt16();
-            if (uk1 != UnknownConstant)
+            /*if (uk1 != UnknownConstant)
             {
                 Console.WriteLine($"WARNING: Unknown1 != 0x108! ({uk1})");
+            }*/
+            if (uk1 == UnknownConstant)
+            {
+                CompressionFormat = PacCompressionFormat.Deflate;
+            }
+            else if (uk1 == UnknownConstant1)
+            {
+                CompressionFormat = PacCompressionFormat.Lz4;
+            }
+            else
+            {
+                Console.WriteLine($"WARNING: Unknown1 doesn't match a known value! ({uk1})");
             }
 
-            Length = HasDependencies ? LengthWithDependencies : LengthWithoutDependencies;
+            if ((flags & 0x80) != 0)
+            {
+                DependencyEntriesLength = reader.ReadUInt32();
+                CompressedChunksLength = reader.ReadUInt32();
+                StringTableLength = reader.ReadUInt32();
+                FinalTableLength = reader.ReadUInt32();
+
+                Length = LengthWithDependencies;
+            }
+            else
+            {
+                Length = LengthWithoutDependencies;
+            }
+
+            //Length = HasDependencies ? LengthWithDependencies : LengthWithoutDependencies;
             reader.Offset = Length;
         }
 
@@ -96,10 +129,10 @@ namespace PuyoPac.HedgeLib.Headers
             writer.Write(HasDependencies ? DependencyConstant : (ushort)0);
             writer.Write(UnknownConstant);
 
-            if (HasDependencies)
+            if (HasDependencies || HasCompressedBlocks)
             {
                 writer.Write(DependencyEntriesLength);
-                writer.Write(0);
+                writer.Write(CompressedChunksLength);
                 writer.Write(StringTableLength);
                 writer.Write(FinalTableLength);
             }

@@ -7,6 +7,8 @@ using PuyoPac.HedgeLib.Headers;
 using System.Text;
 using System.IO.Compression;
 using PuyoPac.IO;
+using K4os.Compression.LZ4;
+using PuyoPac.HedgeLib.Compression;
 
 namespace PuyoPac.HedgeLib.Archives
 {
@@ -18,6 +20,7 @@ namespace PuyoPac.HedgeLib.Archives
         public PACxHeader Header = new PACxHeader();
         public const string Extension = ".pac", Signature = "PACx";
         public const uint DefaultSplitSize = 0x1E00000, DefaultCompressSize = 0x19000;
+        public PacCompressionFormat CompressionFormat = PacCompressionFormat.None;
 
         // Huge thanks to Skyth for these lists as well!
         protected readonly Dictionary<string, string> Types = new Dictionary<string, string>()
@@ -62,7 +65,8 @@ namespace PuyoPac.HedgeLib.Archives
             {".terrain-model", "ResMirageTerrainModel"},
             {".model-instanceinfo", "ResModelInstanceInfo"},
             {".grass.bin", "ResTerrainGrassInfo" },
-            {".pss", "ResPss" }
+            {".pss", "ResPss" },
+            {".bmp", "ResRawData" },
         };
 
         protected readonly string[] RootExclusiveTypes = new string[]
@@ -96,6 +100,7 @@ namespace PuyoPac.HedgeLib.Archives
             ".cnvrs-meta",
             ".cnvrs-proj",
             ".pss",
+            ".bmp",
         };
 
         protected enum DataEntryTypes : ulong
@@ -122,9 +127,31 @@ namespace PuyoPac.HedgeLib.Archives
             var reader = new BINAReader(fileStream);
             ContainerHeader.Read(reader);
 
+            // If there are any compressed chunks, read them.
+            List<CompressedBlock> compressedChunks = null;
+            if (ContainerHeader.HasCompressedBlocks)
+            {
+                reader.JumpTo(ContainerHeader.DependencyEntriesLength, false);
+
+                var compressedChunksCount = reader.ReadInt32();
+                compressedChunks = new List<CompressedBlock>(compressedChunksCount);
+
+                for (var i = 0; i < compressedChunksCount; i++)
+                {
+                    var compressedLength = reader.ReadUInt32();
+                    var length = reader.ReadUInt32();
+
+                    compressedChunks.Add(new CompressedBlock
+                    {
+                        CompressedLength = compressedLength,
+                        Length = length,
+                    });
+                }
+            }
+
             // Add the root PAC to the PAC entries, then loop through it and any PACs that may be added
             var pacEntries = new Queue<PacEntry>();
-            pacEntries.Enqueue(new PacEntry(ContainerHeader.RootOffset, ContainerHeader.RootCompressedLength, ContainerHeader.RootLength));
+            pacEntries.Enqueue(new PacEntry(ContainerHeader.RootOffset, ContainerHeader.RootCompressedLength, ContainerHeader.RootLength, compressedChunks));
             while (pacEntries.TryDequeue(out var entry))
             {
                 LoadPac(entry.Open(fileStream), pacEntries);
@@ -169,15 +196,45 @@ namespace PuyoPac.HedgeLib.Archives
             // Read splits
             if (Header.SplitCount != 0)
             {
+                var pacEntriesLocal = new List<(long, PacEntry)>();
+
                 reader.JumpTo(Header.NodeTreeLength + 0x10, false);
                 for (uint i = 0; i < Header.SplitCount; i++)
                 {
                     reader.ReadInt64(); // We don't care about the name of the split archive
                     var compressedLength = reader.ReadUInt32();
                     var length = reader.ReadUInt32();
-                    var offset = reader.ReadInt64();
+                    var offset = reader.ReadUInt32();
+                    var compressedBlocksCount = reader.ReadInt32();
 
-                    pacEntries.Enqueue(new PacEntry(offset, compressedLength, length));
+                    if (ContainerHeader.HasCompressedBlocks)
+                    {
+                        var compressedBlocksOffset = reader.ReadInt64();
+                        var previousPosition = reader.BaseStream.Position;
+                        reader.JumpTo(compressedBlocksOffset);
+
+                        var compressedBlocks = new List<CompressedBlock>(compressedBlocksCount);
+                        for (var j = 0; j < compressedBlocksCount; j++)
+                        {
+                            var compressedBlockLength = reader.ReadUInt32();
+                            var blockLength = reader.ReadUInt32();
+
+                            compressedBlocks.Add(new CompressedBlock
+                            {
+                                CompressedLength = compressedBlockLength,
+                                Length = blockLength,
+                            });
+                        }
+
+                        reader.JumpTo(previousPosition);
+
+                        pacEntries.Enqueue(new PacEntry(offset, compressedLength, length, compressedBlocks));
+                    }
+                    else
+                    {
+                        pacEntries.Enqueue(new PacEntry(offset, compressedLength, length));
+                    }
+
                 }
             }
 
@@ -335,7 +392,7 @@ namespace PuyoPac.HedgeLib.Archives
                         string fileName = $"{shortName}{Extension}.{arcIndex.ToString("000")}";
                         var startPosition = fileStream.Position;
 
-                        (startIndex, compressedLength, length) = SavePac(fileStream, splitCount, compressSize, startIndex);
+                        (startIndex, compressedLength, length, _) = SavePac(fileStream, splitCount, compressSize, startIndex);
                         writer.FixPadding(16);
                         pacList.Add(new PacEntry(startPosition, compressedLength, length, fileName));
                         ++arcIndex;
@@ -344,7 +401,7 @@ namespace PuyoPac.HedgeLib.Archives
 
                 // Save Root PAC
                 ContainerHeader.RootOffset = (uint)fileStream.Position;
-                (_, ContainerHeader.RootCompressedLength, ContainerHeader.RootLength) = SavePac(fileStream, null, compressSize, 0, pacList);
+                (_, ContainerHeader.RootCompressedLength, ContainerHeader.RootLength, _) = SavePac(fileStream, null, compressSize, 0, pacList);
                 writer.FixPadding(16);
             }
 
@@ -352,7 +409,7 @@ namespace PuyoPac.HedgeLib.Archives
             else
             {
                 ContainerHeader.RootOffset = (uint)fileStream.Position;
-                (_, ContainerHeader.RootCompressedLength, ContainerHeader.RootLength) = SavePac(fileStream, null, compressSize);
+                (_, ContainerHeader.RootCompressedLength, ContainerHeader.RootLength, _) = SavePac(fileStream, null, compressSize);
                 writer.FixPadding(16);
             }
 
@@ -371,7 +428,7 @@ namespace PuyoPac.HedgeLib.Archives
             SavePac(fileStream, null, null);
         }
 
-        protected (int, uint, uint) SavePac(Stream fileStream,
+        protected (int, uint, uint, List<CompressedBlock>) SavePac(Stream fileStream,
             uint? sizeLimit,
             uint? compressSize,
             int startIndex = 0,
@@ -538,8 +595,34 @@ namespace PuyoPac.HedgeLib.Archives
 
                     writer.Write(splitList[i].CompressedLength);
                     writer.Write(splitList[i].Length);
-                    writer.Write(splitList[i].Offset);
-                    Header.SplitListLength += 16;
+
+                    if (ContainerHeader.HasCompressedBlocks)
+                    {
+                        writer.Write((uint)splitList[i].Offset);
+                        writer.Write(splitList[i].CompressedBlocks.Count);
+                        writer.AddOffset($"splitPACsCompressedBlocksOffset{i}", 8);
+                        Header.SplitListLength += 24;
+                    }
+                    else
+                    {
+                        writer.Write(splitList[i].Offset);
+                        Header.SplitListLength += 16;
+                    }
+                }
+
+                // Write compressed blocks
+                if (ContainerHeader.HasCompressedBlocks)
+                {
+                    for (int i = 0; i < splitList.Count; ++i)
+                    {
+                        writer.FillInOffsetLong($"splitPACsCompressedBlocksOffset{i}", true, false);
+
+                        foreach (var compressedBlock in splitList[i].CompressedBlocks)
+                        {
+                            writer.Write(compressedBlock.CompressedLength);
+                            writer.Write(compressedBlock.Length);
+                        }
+                    }
                 }
             }
 
@@ -588,18 +671,48 @@ namespace PuyoPac.HedgeLib.Archives
             Header.FinishWrite(writer);
 
             // Write the data to the main file stream and see if it should be compressed.
+            List<CompressedBlock> compressedBlocks = null;
             uint compressedLength, length = (uint)memoryStream.Length;
             memoryStream.Position = 0;
             if (compressSize.HasValue && memoryStream.Length >= compressSize.Value)
             {
-                var startPosition = fileStream.Position;
+                /*var startPosition = fileStream.Position;
                 using (var compressionStream = new DeflateStream(fileStream, CompressionLevel.Optimal, true))
                 {
                     memoryStream.CopyTo(compressionStream);
                 }
                 var endPosition = fileStream.Position;
 
-                compressedLength = (uint)(endPosition - startPosition);
+                compressedLength = (uint)(endPosition - startPosition);*/
+
+                // Compress using LZ4 compression
+                if (ContainerHeader.HasCompressedBlocks)
+                {
+                    compressedBlocks = new List<CompressedBlock>();
+
+                    compressedLength = 0;
+                    var remainingLength = length;
+
+                    while (remainingLength > 0)
+                    {
+                        var blockLength = Math.Min(remainingLength, 1024 * 64);
+                        var compressedBlockLength = (uint)Lz4Compression.Compress(memoryStream, (int)blockLength, fileStream);
+
+                        compressedBlocks.Add(new CompressedBlock
+                        {
+                            CompressedLength = compressedBlockLength,
+                            Length = blockLength,
+                        });
+
+                        remainingLength -= blockLength;
+                    }
+                }
+
+                // Compress using DEFLATE compression
+                else
+                {
+                    compressedLength = (uint)DeflateCompression.Compress(memoryStream, fileStream);
+                }
             }
             else
             {
@@ -608,7 +721,7 @@ namespace PuyoPac.HedgeLib.Archives
                 compressedLength = length;
             }
 
-            return (endIndex, compressedLength, length);
+            return (endIndex, compressedLength, length, compressedBlocks);
         }
 
         // Other
@@ -1126,10 +1239,20 @@ namespace PuyoPac.HedgeLib.Archives
             public uint CompressedLength { get; }
             public uint Length { get; }
             public string Name { get; }
+            public List<CompressedBlock> CompressedBlocks { get; }
 
             public PacEntry(long offset, uint compressedLength, uint length)
-                : this(offset, compressedLength, length, null)
+                : this(offset, compressedLength, length, (string)null)
             {
+            }
+
+            public PacEntry(long offset, uint compressedLength, uint length, IEnumerable<CompressedBlock> compressedChunks)
+                : this(offset, compressedLength, length, (string)null)
+            {
+                if (compressedChunks != null)
+                {
+                    CompressedBlocks = new List<CompressedBlock>(compressedChunks);
+                }
             }
 
             public PacEntry(long offset, uint compressedLength, uint length, string name)
@@ -1144,16 +1267,38 @@ namespace PuyoPac.HedgeLib.Archives
             {
                 if (CompressedLength != Length)
                 {
-                    using var compressedStream = new DeflateStream(new StreamView(stream, Offset, CompressedLength), CompressionMode.Decompress);
-                    var decompressedStream = new MemoryStream();
-                    compressedStream.CopyTo(decompressedStream);
-                    decompressedStream.Position = 0;
+                    var compressedStream = new StreamView(stream, Offset, CompressedLength);
 
-                    return decompressedStream;
+                    // Data is LZ4 compressed
+                    if (CompressedBlocks?.Any() == true)
+                    {
+                        var decompressedStream = new MemoryStream((int)Length);
+                        foreach (var compressedBlock in CompressedBlocks)
+                        {
+                            Lz4Compression.Decompress(compressedStream, (int)compressedBlock.CompressedLength, decompressedStream, (int)compressedBlock.Length);
+                        }
+
+                        File.WriteAllBytes("dump-" + Offset + ".bin", decompressedStream.ToArray());
+
+                        decompressedStream.Position = 0;
+                        return decompressedStream;
+                    }
+
+                    // Data is DEFLATE compressed
+                    else
+                    {
+                        return DeflateCompression.Decompress(compressedStream);
+                    }
                 }
 
                 return new StreamView(stream, Offset, Length);
             }
+        }
+
+        protected struct CompressedBlock
+        {
+            public uint CompressedLength;
+            public uint Length;
         }
     }
 }
