@@ -1278,8 +1278,6 @@ namespace PuyoPac.HedgeLib.Archives
                             Lz4Compression.Decompress(compressedStream, (int)compressedBlock.CompressedLength, decompressedStream, (int)compressedBlock.Length);
                         }
 
-                        File.WriteAllBytes("dump-" + Offset + ".bin", decompressedStream.ToArray());
-
                         decompressedStream.Position = 0;
                         return decompressedStream;
                     }
