@@ -7,9 +7,9 @@ namespace PuyoPac
     {
         public List<string> Dependency { get; set; }
 
-        public bool NoSplits { get; set; }
+        public string Compression { get; set; }
 
-        public bool NoCompression { get; set; }
+        public bool NoSplits { get; set; }
 
         public bool NoAutoDependencies { get; set; }
 

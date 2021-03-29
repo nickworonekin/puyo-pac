@@ -15,7 +15,8 @@ namespace PuyoPac.HedgeLib.Headers
         {
             HasNoSplits = 1,
             IsSplit = 2,
-            HasSplits = 5
+            HasSplits = 5,
+            HasSplitsWithCompressedBlocks = 13,
         }
 
         public const string PACxSignature = "PACx";

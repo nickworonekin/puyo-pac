@@ -15,18 +15,16 @@ namespace PuyoPac.HedgeLib.Headers
         public bool HasDependencies;
         public bool HasCompressedBlocks;
 
-        public PacCompressionFormat CompressionFormat = PacCompressionFormat.None;
-
         public const string PACxSignature = "PACx";
-        public const uint LengthWithoutDependencies = 0x20, LengthWithDependencies = 0x30;
-        public const ushort VersionNumber = 403, UnknownConstant = 0x108, DependencyConstant = 0x82, UnknownConstant1 = 0x208;
+        public const uint LengthWithoutFlags = 0x20, LengthWithFlags = 0x30;
+        public const ushort VersionNumber = 403, UnknownConstant = 0x108, UnknownConstant1 = 0x208;
 
         // Constructors
-        public PACx403Header(ushort version = VersionNumber, bool isBigEndian = false, bool hasDependencies = false)
+        public PACx403Header(ushort version = VersionNumber, bool isBigEndian = false, bool hasDependencies = false, bool hasCompressedBlocks = false)
         {
             IsBigEndian = isBigEndian;
             Version = version;
-            Length = hasDependencies ? LengthWithDependencies : LengthWithoutDependencies;
+            Length = hasDependencies || hasCompressedBlocks ? LengthWithFlags : LengthWithoutFlags;
         }
 
         public PACx403Header(ExtendedBinaryReader reader)
@@ -65,21 +63,13 @@ namespace PuyoPac.HedgeLib.Headers
             HasCompressedBlocks = (flags & 0x1) != 0;
 
             ushort uk1 = reader.ReadUInt16();
-            /*if (uk1 != UnknownConstant)
+            if (!HasCompressedBlocks && uk1 != UnknownConstant)
             {
                 Console.WriteLine($"WARNING: Unknown1 != 0x108! ({uk1})");
-            }*/
-            if (uk1 == UnknownConstant)
-            {
-                CompressionFormat = PacCompressionFormat.Deflate;
             }
-            else if (uk1 == UnknownConstant1)
+            else if (HasCompressedBlocks && uk1 != UnknownConstant1)
             {
-                CompressionFormat = PacCompressionFormat.Lz4;
-            }
-            else
-            {
-                Console.WriteLine($"WARNING: Unknown1 doesn't match a known value! ({uk1})");
+                Console.WriteLine($"WARNING: Unknown1 != 0x208! ({uk1})");
             }
 
             if ((flags & 0x80) != 0)
@@ -89,26 +79,25 @@ namespace PuyoPac.HedgeLib.Headers
                 StringTableLength = reader.ReadUInt32();
                 FinalTableLength = reader.ReadUInt32();
 
-                Length = LengthWithDependencies;
+                Length = LengthWithFlags;
             }
             else
             {
-                Length = LengthWithoutDependencies;
+                Length = LengthWithoutFlags;
             }
 
-            //Length = HasDependencies ? LengthWithDependencies : LengthWithoutDependencies;
             reader.Offset = Length;
         }
 
         public override void PrepareWrite(ExtendedBinaryWriter writer)
         {
-            if (HasDependencies)
+            if (HasDependencies || HasCompressedBlocks)
             {
-                writer.WriteNulls(LengthWithDependencies);
+                writer.WriteNulls(LengthWithFlags);
             }
             else
             {
-                writer.WriteNulls(Length);
+                writer.WriteNulls(LengthWithoutFlags);
             }
 
 
@@ -117,6 +106,16 @@ namespace PuyoPac.HedgeLib.Headers
 
         public override void FinishWrite(ExtendedBinaryWriter writer)
         {
+            ushort flags = 0;
+            if (HasDependencies)
+            {
+                flags |= 0x82;
+            }
+            if (HasCompressedBlocks)
+            {
+                flags |= 0x81;
+            }
+
             writer.WriteSignature(PACxSignature);
             writer.WriteSignature(Version.ToString());
             writer.Write((IsBigEndian) ? BigEndianFlag : LittleEndianFlag);
@@ -126,10 +125,10 @@ namespace PuyoPac.HedgeLib.Headers
             writer.Write(RootOffset);
             writer.Write(RootCompressedLength);
             writer.Write(RootLength);
-            writer.Write(HasDependencies ? DependencyConstant : (ushort)0);
-            writer.Write(UnknownConstant);
+            writer.Write(flags);
+            writer.Write(HasCompressedBlocks ? UnknownConstant1 : UnknownConstant);
 
-            if (HasDependencies || HasCompressedBlocks)
+            if ((flags & 0x80) != 0)
             {
                 writer.Write(DependencyEntriesLength);
                 writer.Write(CompressedChunksLength);

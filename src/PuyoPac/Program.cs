@@ -1,4 +1,5 @@
 ﻿using PuyoPac.HedgeLib.Archives;
+using PuyoPac.HedgeLib.Compression;
 using PuyoPac.IO;
 using System;
 using System.Collections.Generic;
@@ -21,8 +22,11 @@ namespace PuyoPac
                     AllowMultipleArgumentsPerToken = false,
                     Argument = new Argument<List<string>>("path"),
                 },
+                new Option<string>(new string[] { "-c", "--compression" }, "Set the compression format to use when compressing embedded PACs. If set to none, embedded PACs will not be compressed. If not set, defaults to lz4.\n\nAllowed values: none, deflate, lz4\n")
+                {
+                    Argument = new Argument<string>("format"),
+                },
                 new Option<bool>("--no-splits", "Do not split embedded PACs."),
-                new Option<bool>("--no-compression", "Do not compress embedded PACs."),
                 new Option<bool>("--no-auto-dependencies", "Do not automatically add dependencies based on the output name."),
                 new Argument<string>("output", "Set the output name.")
                     .LegalFilePathsOnly(),
@@ -65,7 +69,11 @@ namespace PuyoPac
                 if (console != null)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
+#if DEBUG
+                    console.Error.Write(e + Environment.NewLine);
+#else
                     console.Error.Write(e.Message + Environment.NewLine);
+#endif
                     Console.ResetColor();
                 }
 
@@ -87,26 +95,44 @@ namespace PuyoPac
             {
                 foreach (var dependency in options.Dependency)
                 {
-                    if (dependency.Equals("ui_cutin_2p", StringComparison.OrdinalIgnoreCase))
-                    {
-                        dependencies.Add(@"ui\ui_cutin_cmn");
-                        dependencies.Add(@"ui\ui_resident");
-                        dependencies.Add(@"ui\ui_system");
-                    }
+                    // Get the dependency path or map the alias to a dependency path.
+                    string dependencyPath;
                     if (dependency.Equals("ui_cutin_cmn", StringComparison.OrdinalIgnoreCase))
                     {
-                        dependencies.Add(@"ui\ui_resident");
-                        dependencies.Add(@"ui\ui_system");
+                        dependencyPath = @"ui\ui_cutin_cmn";
                     }
-                    else if (dependency.Equals("ui", StringComparison.OrdinalIgnoreCase))
+                    else if (dependency.Equals("ui_system", StringComparison.OrdinalIgnoreCase))
                     {
-                        dependencies.Add(@"ui\ui_resident");
+                        dependencyPath = @"ui\ui_system";
+                    }
+                    else if (dependency.Equals("ui_adv_area_common", StringComparison.OrdinalIgnoreCase))
+                    {
+                        dependencyPath = @"ui\adventure\ui_adv_area_common";
+                    }
+                    else if (dependency.Equals("ui_resident", StringComparison.OrdinalIgnoreCase))
+                    {
+                        dependencyPath = @"ui\ui_resident";
                     }
                     else
                     {
-                        var dependencyPath = dependency.Replace('/', '\\');
+                        dependencyPath = dependency.Replace('/', '\\');
                         dependencyPath = Path.ChangeExtension(dependencyPath, null);
-                        dependencies.Add(dependencyPath);
+                    }
+
+                    // Add the dependency and any dependents.
+                    dependencies.Add(dependencyPath);
+                    if (dependencyPath.Equals(@"ui\ui_cutin_cmn", StringComparison.OrdinalIgnoreCase))
+                    {
+                        dependencies.Add(@"ui\ui_resident");
+                        dependencies.Add(@"ui\ui_system");
+                    }
+                    else if (dependencyPath.Equals(@"ui\ui_system", StringComparison.OrdinalIgnoreCase))
+                    {
+                        dependencies.Add(@"ui\ui_resident");
+                    }
+                    else if (dependencyPath.Equals(@"ui\adventure\ui_adv_area_common", StringComparison.OrdinalIgnoreCase))
+                    {
+                        dependencies.Add(@"ui\ui_resident");
                     }
                 }
             }
@@ -115,21 +141,10 @@ namespace PuyoPac
             else if (!options.NoAutoDependencies)
             {
                 var outputFilename = Path.GetFileName(options.Output);
-                if (outputFilename.StartsWith("ui_cutin_2p_", StringComparison.OrdinalIgnoreCase))
+                var autoDependencies = Dependency.GetDependencies(outputFilename);
+                if (autoDependencies is not null)
                 {
-                    dependencies.Add(@"ui\ui_cutin_cmn");
-                    dependencies.Add(@"ui\ui_resident");
-                    dependencies.Add(@"ui\ui_system");
-                }
-                else if (outputFilename.StartsWith("ui_cutin_cmn", StringComparison.OrdinalIgnoreCase))
-                {
-                    dependencies.Add(@"ui\ui_resident");
-                    dependencies.Add(@"ui\ui_system");
-                }
-                else if (outputFilename.StartsWith("ui_", StringComparison.OrdinalIgnoreCase)
-                    && !outputFilename.StartsWith("ui_resident", StringComparison.OrdinalIgnoreCase))
-                {
-                    dependencies.Add(@"ui\ui_resident");
+                    dependencies.AddRange(autoDependencies);
                 }
             }
 
@@ -138,6 +153,17 @@ namespace PuyoPac
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(x => x)
                 .ToList();
+
+            // Get the compression format to use.
+            var compressionFormat = PacCompressionFormat.Lz4;
+            if (string.Equals(options.Compression, "deflate", StringComparison.OrdinalIgnoreCase))
+            {
+                compressionFormat = PacCompressionFormat.Deflate;
+            }
+            else if (string.Equals(options.Compression, "none", StringComparison.OrdinalIgnoreCase))
+            {
+                compressionFormat = PacCompressionFormat.None;
+            }
 
             var archive = new ForcesArchive();
 
@@ -151,8 +177,9 @@ namespace PuyoPac
             archive.Save(options.Output,
                 overwrite: true,
                 dependencies: dependencies,
+                compressionFormat: compressionFormat,
                 splitCount: options.NoSplits ? null : ForcesArchive.DefaultSplitSize,
-                compressSize: options.NoCompression ? null : ForcesArchive.DefaultCompressSize);
+                compressSize: compressionFormat == PacCompressionFormat.None ? null : ForcesArchive.DefaultCompressSize);
         }
 
         static void Extract(ExtractCommandOptions options)

@@ -201,6 +201,13 @@ namespace PuyoPac.HedgeLib.IO
             // Write Offset Table
             foreach (var offset in offsets)
             {
+                // Hack-ish but we need to do this so we can fill in offsets that should not be included
+                // in the offset table but need to be filled in after the offset table is written.
+                if (offset.Key.StartsWith("-"))
+                {
+                    continue;
+                }
+
                 uint d = (offset.Value - lastOffsetPos) >> 2;
                 if (d <= 0x3F)
                 {

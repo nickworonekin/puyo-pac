@@ -24,21 +24,39 @@ Add a dependency on a PAC archive. This option can be repeated multiple times fo
 
 By default, if no dependencies are provided, they will be automatically added based on the output name. This behavior can be disabled with the `--no-auto-dependencies` option.
 
-In addition, the following aliases may be used to add the following dependencies:
+Aliases may be used to reference common dependencies:
 
-| Alias | Dependencies Added |
+| Alias | Dependency
 | - | - |
-| ui_cutin_2p | ui\ui_cutin_cmn<br>ui\ui_resident<br>ui\ui_system
-| ui_cutin_cmn | ui\ui_resident<br>ui\ui_system
-| ui | ui\ui_resident
+| ui_cutin_cmn | ui\ui_cutin_cmn
+| ui_system | ui\ui_system
+| ui_adv_area_common | ui\adventure\ui_adv_area_common
+| ui_resident | ui\ui_resident
+
+In addition, some dependencies may have a dependency on additional PAC archives. These additional dependencies will be automatically added when you add the respective dependency:
+
+| Dependency | Additional Dependencies |
+| - | - |
+| ui\ui_cutin_cmn | ui\ui_resident<br>ui\ui_system
+| ui\ui_system | ui\ui_resident
+| ui\adventure\ui_adv_area_common | ui\ui_resident
+
+`-c, --compression <format>`
+
+Set the compression format to use when compressing embedded PACs. Can be one of the following values:
+* none
+* deflate
+* lz4
+
+If set to none, embedded PACs will not be compressed. If not set, defaults to lz4. 
+
+When using Deflate compression, embedded PACs are compressed only when they exceed 100KB.
+
+PAC archives created for use with the Nintendo Switch version of the game should use Deflate compression. PAC archives created for use with the PC version of the game should use LZ4 compression.
 
 `--no-splits`
 
 Do not split embedded PACs. By default, embedded PACs are split into multiple files when they exceed 30MB.
-
-`--no-compression`
-
-Do not compress embedded PACs. By default, embedded PACs are compressed when they exceed 100KB.
 
 `--no-auto-dependencies`
 
