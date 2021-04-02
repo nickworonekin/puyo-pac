@@ -376,7 +376,7 @@ namespace PuyoPac.HedgeLib.Archives
                     while (startIndex != -1)
                     {
                         string fileName = $"{shortName}{Extension}.{arcIndex.ToString("000")}";
-                        var startPosition = fileStream.Position;
+                        var startPosition = splitPacStream.Position;
 
                         (startIndex, pacWriter, length) = CreatePac(splitCount, startIndex);
                         (compressedLength, compressedBlocks) = CompressAndWritePac(pacWriter.BaseStream, splitPacStream, compressSize);
