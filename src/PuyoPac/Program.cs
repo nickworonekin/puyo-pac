@@ -20,11 +20,11 @@ namespace PuyoPac
                 new Option<List<string>>(new string[] { "-d", "--dependency" }, "Add a dependency on a PAC archive. This option can be repeated multiple times for multiple dependencies. The path of the dependent PAC is relative to the raw folder, uses backslashes for folder seperators, and does not include the .pac file extension (e.g. \"ui\\ui_resident\").\n\nBy default, if no dependencies are provided, they will be automatically added based on the output name. This behavior can be disabled with the --no-auto-dependencies option.\n")
                 {
                     AllowMultipleArgumentsPerToken = false,
-                    Argument = new Argument<List<string>>("path"),
+                    ArgumentHelpName = "path",
                 },
                 new Option<string>(new string[] { "-c", "--compression" }, "Set the compression format to use when compressing embedded PACs. If set to none, embedded PACs will not be compressed. If not set, defaults to lz4.\n\nAllowed values: none, deflate, lz4\n")
                 {
-                    Argument = new Argument<string>("format"),
+                    ArgumentHelpName = "format",
                 },
                 new Option<bool>("--no-splits", "Do not split embedded PACs."),
                 new Option<bool>("--no-auto-dependencies", "Do not automatically add dependencies based on the output name."),
